@@ -29,6 +29,8 @@ dependencies = [
     "tqdm>=4.67.1",
     "typing-extensions>=4.14.0",
     "yfinance>=0.2.63",
+    # RAG memory backend (Track E)
+    "qdrant-client>=1.18.0",
     # Security pins for transitive deps with known advisories.
     # Bump these in lockstep with upstream when they catch up.
     "urllib3>=2.7.0",
@@ -37,6 +39,13 @@ dependencies = [
     "curl-cffi>=0.15.0",
     "pygments>=2.20.0",
     "protobuf>=6.33.5",
+]
+
+[project.optional-dependencies]
+# Local embedding model fallback for offline / no-OPENAI_API_KEY use.
+# Pulls ~1 GB of PyTorch; gated behind `pip install tradingagents[local-embeddings]`.
+local-embeddings = [
+    "sentence-transformers>=3.0.0",
 ]
 
 [project.scripts]
