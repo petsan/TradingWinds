@@ -133,6 +133,46 @@ For local models with Ollama:
 docker compose --profile ollama run --rm tradingagents-ollama
 ```
 
+### Proxmox VE (LXC)
+
+To run TradingAgents in an isolated LXC container on a Proxmox VE host, use the
+provisioning script in [`scripts/proxmox-deploy.sh`](scripts/proxmox-deploy.sh). Run it **as root on the
+Proxmox host** (not inside an existing guest):
+
+```bash
+# On the Proxmox host
+curl -fsSL https://raw.githubusercontent.com/petsan/TradingWinds/main/scripts/proxmox-deploy.sh -o proxmox-deploy.sh
+chmod +x proxmox-deploy.sh
+./proxmox-deploy.sh --ctid 200 --hostname tradingwinds
+```
+
+The script downloads a Debian template if missing, creates an unprivileged LXC
+(2 vCPU / 4 GiB RAM / 16 GiB disk by default), installs Python 3.12 and build
+tooling, clones the repo, installs `tradingagents` into a venv, and lays down
+an `.env` scaffold for your API keys.
+
+After it finishes, set your API keys and launch the CLI:
+
+```bash
+pct exec 200 -- nano /home/tradingagents/app/.env
+pct exec 200 -- tradingagents
+```
+
+Common overrides (all flags have matching uppercase env-var equivalents):
+
+```bash
+./proxmox-deploy.sh \
+  --ctid 210 --hostname tw-prod \
+  --ram-mb 8192 --cores 4 --disk-gb 32 \
+  --rootfs-storage local-zfs --bridge vmbr1 \
+  --repo-branch v0.2.5 \
+  --ssh-key-file ~/.ssh/authorized_keys
+```
+
+Re-running the script with the same `--ctid` is idempotent: it skips container
+creation, re-installs OS packages, fetches the requested branch, and refreshes
+the venv install. Run `./proxmox-deploy.sh --help` for the full flag list.
+
 ### Required APIs
 
 TradingAgents supports multiple LLM providers. Set the API key for your chosen provider:
