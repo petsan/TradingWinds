@@ -17,7 +17,6 @@ dependencies = [
     "langgraph>=1.0.10",
     "langgraph-checkpoint-sqlite>=3.0",
     "pandas>=2.3.0",
-    "parsel>=1.10.0",
     "python-dotenv>=1.0.0",
     "pytz>=2025.2",
     "questionary>=2.1.0",
@@ -37,6 +36,7 @@ dependencies = [
     "pyasn1>=0.6.3",
     "curl-cffi>=0.15.0",
     "pygments>=2.20.0",
+    "protobuf>=6.33.5",
 ]
 
 [project.scripts]

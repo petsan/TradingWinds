@@ -15,7 +15,7 @@
 #
 # Usage:
 #   ./proxmox-deploy.sh                              # use defaults / env vars
-#   CTID=210 HOSTNAME=tw-prod ./proxmox-deploy.sh    # override per invocation
+#   CTID=210 CT_HOSTNAME=tw-prod ./proxmox-deploy.sh    # override per invocation
 #   ./proxmox-deploy.sh --ctid 210 --hostname tw-prod
 #
 # All flags have equivalent uppercase env-var names. Flags win when both are set.
@@ -26,7 +26,7 @@ set -euo pipefail
 # Defaults — override via env or flags
 # ----------------------------------------------------------------------------
 : "${CTID:=200}"
-: "${HOSTNAME:=tradingwinds}"
+: "${CT_HOSTNAME:=tradingwinds}"
 : "${TEMPLATE_STORAGE:=local}"
 : "${ROOTFS_STORAGE:=local-lvm}"
 : "${BRIDGE:=vmbr0}"
@@ -79,7 +79,7 @@ USAGE
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --ctid) CTID="$2"; shift 2 ;;
-    --hostname) HOSTNAME="$2"; shift 2 ;;
+    --hostname) CT_HOSTNAME="$2"; shift 2 ;;
     --template-storage) TEMPLATE_STORAGE="$2"; shift 2 ;;
     --rootfs-storage) ROOTFS_STORAGE="$2"; shift 2 ;;
     --bridge) BRIDGE="$2"; shift 2 ;;
@@ -148,12 +148,13 @@ fi
 # ----------------------------------------------------------------------------
 if pct status "$CTID" >/dev/null 2>&1; then
   log "Container $CTID already exists; skipping create. Will re-run provisioning steps inside."
-  CREATED=0
+  log "NOTE: existing CT retains its current cores/memory/storage/hostname/network config."
+  log "      Re-create the CT (pct destroy $CTID first) if you need different sizing or storage."
 else
-  log "Creating CT $CTID ($HOSTNAME) on $ROOTFS_STORAGE"
+  log "Creating CT $CTID ($CT_HOSTNAME) on $ROOTFS_STORAGE"
   CREATE_ARGS=(
     "$CTID" "$TEMPLATE_PATH"
-    --hostname "$HOSTNAME"
+    --hostname "$CT_HOSTNAME"
     --cores "$CORES"
     --memory "$RAM_MB"
     --swap "$SWAP_MB"
@@ -170,17 +171,26 @@ else
   [[ -n "$SSH_KEY_FILE" ]] && CREATE_ARGS+=(--ssh-public-keys "$SSH_KEY_FILE")
 
   pct create "${CREATE_ARGS[@]}"
-  CREATED=1
 fi
 
 log "Starting CT $CTID"
 pct start "$CTID" >/dev/null 2>&1 || true   # already-running is fine
 
-# Wait for DHCP / network to settle before running apt
+# Wait for DHCP / network to settle before running apt. Fail loudly on timeout
+# so the operator sees the cause instead of a cryptic apt error downstream.
+dhcp_ok=0
 for _ in $(seq 1 30); do
-  if pct exec "$CTID" -- getent hosts deb.debian.org >/dev/null 2>&1; then break; fi
+  if pct exec "$CTID" -- getent hosts deb.debian.org >/dev/null 2>&1; then
+    dhcp_ok=1
+    break
+  fi
   sleep 1
 done
+if [[ "$dhcp_ok" -ne 1 ]]; then
+  echo "Error: CT $CTID did not get network within 30s." >&2
+  echo "       Check bridge ($BRIDGE), DHCP server, and 'pct status $CTID'." >&2
+  exit 1
+fi
 
 # ----------------------------------------------------------------------------
 # Step 3: Install OS-level dependencies inside the container
@@ -202,18 +212,26 @@ pct exec "$CTID" -- bash -c '
 # Step 4: Create the app user and clone the repo
 # ----------------------------------------------------------------------------
 log "Creating tradingagents user and cloning repo (branch: $REPO_BRANCH)"
-pct exec "$CTID" -- bash -c "
+# Pass REPO_URL and REPO_BRANCH as positional argv (not via the heredoc) so
+# values containing quotes / shell metacharacters can never be interpreted as
+# code. The single-quoted heredoc disables outer-shell expansion entirely;
+# inside, "$1" and "$2" are properly quoted variable references.
+pct exec "$CTID" -- bash -c '
   set -euo pipefail
+  repo_url="$1"
+  repo_branch="$2"
   if ! id -u tradingagents >/dev/null 2>&1; then
     useradd --create-home --shell /bin/bash tradingagents
   fi
   install -d -o tradingagents -g tradingagents /home/tradingagents/app
   if [ ! -d /home/tradingagents/app/.git ]; then
-    sudo -u tradingagents git clone --branch '$REPO_BRANCH' --depth 1 '$REPO_URL' /home/tradingagents/app
+    sudo -u tradingagents git clone --branch "$repo_branch" --depth 1 "$repo_url" /home/tradingagents/app
   else
-    cd /home/tradingagents/app && sudo -u tradingagents git fetch --depth 1 origin '$REPO_BRANCH' && sudo -u tradingagents git checkout -B '$REPO_BRANCH' FETCH_HEAD
+    cd /home/tradingagents/app
+    sudo -u tradingagents git fetch --depth 1 origin "$repo_branch"
+    sudo -u tradingagents git checkout -B "$repo_branch" FETCH_HEAD
   fi
-"
+' -- "$REPO_URL" "$REPO_BRANCH"
 
 # ----------------------------------------------------------------------------
 # Step 5: Install the package in a venv
@@ -266,7 +284,7 @@ cat <<EOF
 TradingAgents LXC ready.
 
   CTID      : $CTID
-  Hostname  : $HOSTNAME
+  Hostname  : $CT_HOSTNAME
   Address   : ${IP:-<not yet assigned>}
   Repo      : $REPO_URL ($REPO_BRANCH)
   Install   : /home/tradingagents/app (.venv)
